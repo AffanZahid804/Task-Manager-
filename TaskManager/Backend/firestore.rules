@@ -1,0 +1,279 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isBoardMember(boardId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(boardId)) &&
+        (get(/databases/$(database)/documents/boards/$(boardId)).data.userId == request.auth.uid ||
+         request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.members);
+    }
+    
+    function isBoardOwner(boardId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(boardId)) &&
+        get(/databases/$(database)/documents/boards/$(boardId)).data.userId == request.auth.uid;
+    }
+    
+    function isPublicBoard(boardId) {
+      return exists(/databases/$(database)/documents/boards/$(boardId)) &&
+        get(/databases/$(database)/documents/boards/$(boardId)).data.isPublic == true;
+    }
+    
+    function isValidUserData() {
+      return request.resource.data.keys().hasAll(['name', 'email']) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 255 &&
+        request.resource.data.email is string &&
+        request.resource.data.email.matches('^[^@]+@[^@]+\\.[^@]+$');
+    }
+    
+    function isValidBoardData() {
+      return request.resource.data.keys().hasAll(['title', 'userId']) &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.title.size() <= 255 &&
+        request.resource.data.userId is string &&
+        request.resource.data.isPublic is bool;
+    }
+    
+    function isValidColumnData() {
+      return request.resource.data.keys().hasAll(['title', 'boardId', 'position']) &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.title.size() <= 255 &&
+        request.resource.data.boardId is string &&
+        request.resource.data.position is int &&
+        request.resource.data.position >= 0;
+    }
+    
+    function isValidTaskData() {
+      return request.resource.data.keys().hasAll(['title', 'columnId', 'boardId', 'position']) &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.title.size() <= 255 &&
+        request.resource.data.columnId is string &&
+        request.resource.data.boardId is string &&
+        request.resource.data.position is int &&
+        request.resource.data.position >= 0 &&
+        request.resource.data.priority in ['low', 'medium', 'high', 'urgent'] &&
+        request.resource.data.status in ['todo', 'in_progress', 'done', 'archived'];
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUserData();
+      allow update: if isOwner(userId) && isValidUserData();
+      allow delete: if isOwner(userId);
+    }
+    
+    // User settings collection
+    match /user_settings/{settingId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == settingId;
+    }
+    
+    // Boards collection
+    match /boards/{boardId} {
+      allow read: if isAuthenticated() && (isBoardMember(boardId) || isPublicBoard(boardId));
+      allow create: if isAuthenticated() && isValidBoardData() && isOwner(request.resource.data.userId);
+      allow update: if isBoardMember(boardId) && isValidBoardData();
+      allow delete: if isBoardOwner(boardId);
+    }
+    
+    // Board members collection
+    match /board_members/{memberId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(request.resource.data.boardId)) &&
+        isBoardOwner(request.resource.data.boardId);
+      allow update: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardOwner(resource.data.boardId);
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        (isBoardOwner(resource.data.boardId) || request.auth.uid == resource.data.userId);
+    }
+    
+    // Labels collection
+    match /labels/{labelId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(request.resource.data.boardId)) &&
+        isBoardMember(request.resource.data.boardId);
+      allow update: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+    }
+    
+    // Columns collection
+    match /columns/{columnId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(request.resource.data.boardId)) &&
+        isBoardMember(request.resource.data.boardId) &&
+        isValidColumnData();
+      allow update: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId) &&
+        isValidColumnData();
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+    }
+    
+    // Tasks collection
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(request.resource.data.boardId)) &&
+        isBoardMember(request.resource.data.boardId) &&
+        isValidTaskData();
+      allow update: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId) &&
+        isValidTaskData();
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/boards/$(resource.data.boardId)) &&
+        isBoardMember(resource.data.boardId);
+    }
+    
+    // Task comments collection
+    match /task_comments/{commentId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.boardId) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.content is string &&
+        request.resource.data.content.size() > 0 &&
+        request.resource.data.content.size() <= 1000;
+      allow update: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId) &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.content is string &&
+        request.resource.data.content.size() > 0 &&
+        request.resource.data.content.size() <= 1000;
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId) &&
+        resource.data.userId == request.auth.uid;
+    }
+    
+    // Task attachments collection
+    match /task_attachments/{attachmentId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.boardId) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.file_name is string &&
+        request.resource.data.file_name.size() > 0 &&
+        request.resource.data.file_url is string &&
+        request.resource.data.file_url.size() > 0;
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId) &&
+        resource.data.userId == request.auth.uid;
+    }
+    
+    // Task time logs collection
+    match /task_time_logs/{logId} {
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId);
+      allow create: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.boardId) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.start_time is timestamp;
+      allow update: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId) &&
+        resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/tasks/$(resource.data.taskId)) &&
+        exists(/databases/$(database)/documents/boards/$(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId)) &&
+        isBoardMember(get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.boardId) &&
+        resource.data.userId == request.auth.uid;
+    }
+    
+    // Board templates collection
+    match /board_templates/{templateId} {
+      allow read: if true; // Public read access for templates
+      allow create: if isAuthenticated() && 
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 255 &&
+        request.resource.data.template_data is map;
+      allow update: if isAuthenticated() && 
+        (resource.data.created_by == request.auth.uid || resource.data.is_official == true);
+      allow delete: if isAuthenticated() && 
+        (resource.data.created_by == request.auth.uid || resource.data.is_official == true);
+    }
+    
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && 
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.type is string &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.title.size() <= 255;
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+    
+    // User activity log collection
+    match /user_activity_log/{logId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && 
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.action is string &&
+        request.resource.data.action.size() > 0 &&
+        request.resource.data.action.size() <= 100;
+    }
+    
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+} 
